@@ -7,6 +7,8 @@ import Notification from '../schemas/Notification';
 
 import User from '../models/User';
 import File from '../models/File';
+import Queue from '../../lib/Queue';
+import CancellationMail from '../jobs/CancellationMail';
 
 class AppointmentController {
   async index(req, res) {
@@ -95,9 +97,13 @@ class AppointmentController {
     });
 
     const user = await User.findByPk(req.userId);
-    const formattedDate = format(hourStart, "'Dia' dd 'de' MMM', às' H:mm'h'", {
-      local: pt,
-    });
+    const formattedDate = format(
+      hourStart,
+      "'Dia' dd 'de' MMMM', às' H:mm'h'",
+      {
+        local: pt,
+      }
+    );
 
     // Notifica o prestador de serviço
     await Notification.create({
@@ -109,8 +115,21 @@ class AppointmentController {
   }
 
   async delete(req, res) {
-    const appointment = await Appointment.findByPk(req.params.id);
-    if (appointment.user_id !== req.user_id) {
+    const appointment = await Appointment.findByPk(req.params.id, {
+      include: [
+        {
+          model: User,
+          as: 'provider',
+          attributes: ['name', 'email'],
+        },
+        {
+          model: User,
+          as: 'user',
+          attributes: ['name'],
+        },
+      ],
+    });
+    if (appointment.user_id === req.user_id) {
       return res.status(401).json({
         error: "You don't have permission to cancel this appointment.",
       });
@@ -124,8 +143,11 @@ class AppointmentController {
     }
 
     appointment.canceled_at = new Date();
-    await appointment.save();
 
+    await appointment.save();
+    await Queue.add(CancellationMail.key, {
+      appointment,
+    });
     return res.json(appointment);
   }
 }
